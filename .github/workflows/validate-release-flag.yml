@@ -1,13 +1,16 @@
-name: Validate Release Flag
+name: validate-release-flag
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types:
+      - opened
+      - synchronize
+      - reopened
     branches:
       - master
 
 jobs:
-  validate_pr:
+  check-release-flag:
     runs-on: ubuntu-latest
 
     steps:
