@@ -1,18 +1,43 @@
-name: auto-release-on-merge
-
+name: Auto Release on Merge
+ 
 on:
   pull_request:
-    types:
-      - closed
+    types: [opened, synchronize, reopened, closed]
     branches:
-      - master
-
+      - main
+ 
 permissions:
   contents: write
-
+ 
 jobs:
+ 
+  validate_pr:
+    # Run validation only when PR is NOT merged yet
+    if: github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+ 
+    steps:
+      - name: Check commit message for release flag
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          BODY="${{ github.event.pull_request.body }}"
+ 
+          if echo "$TITLE" | grep -iq "release: yes"; then
+            echo "Commit message valid."
+            exit 0
+          fi
+ 
+          if echo "$BODY" | grep -iq "release: yes"; then
+            echo "Commit message valid."
+            exit 0
+          fi
+ 
+          echo "❌ ERROR: PR cannot be merged because it does not contain 'release: yes'"
+          exit 1
+ 
+ 
   create_release:
-    # Only run when PR is merged AND contains 'release: yes' (case-sensitive)
+    # Run only when PR is merged AND has release flag
     if: >
       github.event.pull_request.merged == true &&
       (
@@ -20,21 +45,21 @@ jobs:
         contains(github.event.pull_request.body, 'release: yes')
       )
     runs-on: ubuntu-latest
-
+ 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          ref: master
-
+          ref: main
+ 
       - name: Extract version from composer.json
         id: version
         run: |
           VERSION=$(jq -r '.version' composer.json)
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Detected version from composer.json: $VERSION"
-
-      - name: Create GitHub Release
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Detected version: $VERSION"
+ 
+      - name: Create Release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,4 +67,4 @@ jobs:
           tag_name: "v${{ env.VERSION }}"
           release_name: "Release v${{ env.VERSION }}"
           body: |
-            Auto-release generated for version v${{ env.VERSION }}.
+            Auto-release generated for version v${{ env.VERSION }}
