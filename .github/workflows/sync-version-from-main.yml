@@ -1,85 +1,69 @@
 name: Sync Version from Master Repo
- 
+
 on:
   repository_dispatch:
     types: [sync-version]
- 
+
 permissions:
   contents: write
   pull-requests: write
- 
+
 jobs:
   sync_version:
     runs-on: ubuntu-latest
- 
+
     steps:
       # -----------------------------
-      # Checkout repository
+      # Checkout repository (using PAT)
       # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
- 
+        with:
+          token: ${{ secrets.PAT }}
+
       # -----------------------------
-      # Read incoming version
+      # Sync Version
       # -----------------------------
-      - name: Set VERSION from dispatch event
+      - name: Sync version from dispatch
+        env:
+          PAT: ${{ secrets.PAT }}
         run: |
-          echo "VERSION=${{ github.event.client_payload.version }}" >> $GITHUB_ENV
+          set -e
+
+          VERSION="${{ github.event.client_payload.version }}"
           echo "Incoming version: $VERSION"
- 
-      # -----------------------------
-      # Read local version from composer.json
-      # -----------------------------
-      - name: Read current version
-        id: local
-        run: |
-          CURRENT=$(jq -r '.version' composer.json)
-          echo "CURRENT_VERSION=$CURRENT" >> $GITHUB_ENV
-          echo "Local version: $CURRENT | Incoming: $VERSION"
- 
-      # -----------------------------
-      # STOP JOB IF VERSION MATCHES
-      # -----------------------------
-      - name: Skip if version matches
-        run: |
+
+          CURRENT_VERSION=$(jq -r '.version' composer.json)
+          echo "Current version: $CURRENT_VERSION"
+
+          # Stop if versions match
           if [ "$VERSION" = "$CURRENT_VERSION" ]; then
             echo "✔ Versions match → No action required."
             exit 0
           fi
- 
-      # -----------------------------
-      # Create feature branch
-      # -----------------------------
-      - name: Create new branch
-        run: |
+
           BRANCH="sync-version-v${VERSION}"
-          git checkout -b "$BRANCH"
-          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
- 
-      # -----------------------------
-      # Update composer.json
-      # -----------------------------
-      - name: Update composer.json
-        run: |
-          jq ".version = \"$VERSION\"" composer.json > tmp.json
-          mv tmp.json composer.json
- 
-      # Commit + push
-      - name: Commit and Push
-        run: |
+          echo "Creating branch: $BRANCH"
+
           git config user.name "GitHub Actions Bot"
           git config user.email "ci-bot@github.com"
+
+          git checkout -b "$BRANCH"
+
+          # Update composer.json
+          jq ".version = \"$VERSION\"" composer.json > tmp.json
+          mv tmp.json composer.json
+
           git add composer.json
           git commit -m "chore: sync version to v${VERSION}"
-          git push origin "$BRANCH"
- 
-      # Create Pull Request (NO auto commit, NO auto overwrite)
-      - name: Create Pull Request using GH CLI
-        run: |
+
+          git push https://x-access-token:${PAT}@github.com/${{ github.repository }} "$BRANCH"
+
+          # Create PR
           gh pr create \
             --base master \
             --head "$BRANCH" \
             --title "Sync version to v${VERSION}" \
-            --body "Auto-synced version update."
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            --body "Automated version sync from master repository." \
+            --repo "${{ github.repository }}" \
+            --token "${PAT}"
