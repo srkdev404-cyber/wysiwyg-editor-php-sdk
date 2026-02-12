@@ -2,7 +2,7 @@ name: Sync Version from Master Repo
 
 on:
   repository_dispatch:
-    types: [sync-version]
+    types: [version_update]
 
 permissions:
   contents: write
