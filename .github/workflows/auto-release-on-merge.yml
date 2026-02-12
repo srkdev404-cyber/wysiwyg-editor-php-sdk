@@ -1,43 +1,41 @@
 name: Auto Release on Merge
- 
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches:
       - master
- 
+
 permissions:
   contents: write
- 
+
 jobs:
- 
+
+  # --------------------------------------------
+  # Validate PR before merge
+  # --------------------------------------------
   validate_pr:
-    # Run validation only when PR is NOT merged yet
     if: github.event.pull_request.merged == false
     runs-on: ubuntu-latest
- 
+
     steps:
-      - name: Check commit message for release flag
+      - name: Validate release flag
         run: |
           TITLE="${{ github.event.pull_request.title }}"
           BODY="${{ github.event.pull_request.body }}"
- 
-          if echo "$TITLE" | grep -iq "release: yes"; then
-            echo "Commit message valid."
+
+          if echo "$TITLE $BODY" | grep -iq "release: yes"; then
+            echo "✔ Release flag found."
             exit 0
           fi
- 
-          if echo "$BODY" | grep -iq "release: yes"; then
-            echo "Commit message valid."
-            exit 0
-          fi
- 
-          echo "❌ ERROR: PR cannot be merged because it does not contain 'release: yes'"
+
+          echo "❌ ERROR: PR must contain 'release: yes' to proceed."
           exit 1
- 
- 
+
+  # --------------------------------------------
+  # Create Release after merge
+  # --------------------------------------------
   create_release:
-    # Run only when PR is merged AND has release flag
     if: >
       github.event.pull_request.merged == true &&
       (
@@ -45,26 +43,32 @@ jobs:
         contains(github.event.pull_request.body, 'release: yes')
       )
     runs-on: ubuntu-latest
- 
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.PAT }}
           ref: master
- 
-      - name: Extract version from composer.json
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' composer.json)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Detected version: $VERSION"
- 
-      - name: Create Release
-        uses: actions/create-release@v1
+          fetch-depth: 0
+
+      - name: Create GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: "v${{ env.VERSION }}"
-          release_name: "Release v${{ env.VERSION }}"
-          body: |
-            Auto-release generated for version v${{ env.VERSION }}
+          PAT: ${{ secrets.PAT }}
+        run: |
+          set -e
+
+          VERSION=$(jq -r '.version' composer.json)
+          echo "Detected version: $VERSION"
+
+          # Prevent duplicate release
+          if gh release view "v${VERSION}" --repo "${{ github.repository }}" --token "${PAT}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} already exists."
+            exit 0
+          fi
+
+          gh release create "v${VERSION}" \
+            --title "Release v${VERSION}" \
+            --notes "Auto-release generated for version v${VERSION}" \
+            --repo "${{ github.repository }}" \
+            --token "${PAT}"
