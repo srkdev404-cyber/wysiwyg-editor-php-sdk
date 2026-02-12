@@ -1,8 +1,8 @@
-name: Auto Release on Merge
+name: Auto Release – wysiwyg-php
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [closed]
     branches:
       - master
 
@@ -10,65 +10,86 @@ permissions:
   contents: write
 
 jobs:
-
-  # --------------------------------------------
-  # Validate PR before merge
-  # --------------------------------------------
-  validate_pr:
-    if: github.event.pull_request.merged == false
+  release:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-      - name: Validate release flag
+      # --------------------------------------------
+      # Validate release intent
+      # --------------------------------------------
+      - name: Validate release intent
+        id: intent
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const body  = context.payload.pull_request.body || '';
+            const title = context.payload.pull_request.title || '';
+            const text  = `${title}\n${body}`;
+
+            core.setOutput(
+              'release',
+              /release:\s*yes/i.test(text) ? 'true' : 'false'
+            );
+
+      - name: Stop if not a release PR
+        if: steps.intent.outputs.release == 'false'
         run: |
-          TITLE="${{ github.event.pull_request.title }}"
-          BODY="${{ github.event.pull_request.body }}"
+          echo "ℹ️ Not a release PR. Skipping auto-release."
+          exit 0
 
-          if echo "$TITLE $BODY" | grep -iq "release: yes"; then
-            echo "✔ Release flag found."
-            exit 0
-          fi
-
-          echo "❌ ERROR: PR must contain 'release: yes' to proceed."
-          exit 1
-
-  # --------------------------------------------
-  # Create Release after merge
-  # --------------------------------------------
-  create_release:
-    if: >
-      github.event.pull_request.merged == true &&
-      (
-        contains(github.event.pull_request.title, 'release: yes') ||
-        contains(github.event.pull_request.body, 'release: yes')
-      )
-    runs-on: ubuntu-latest
-
-    steps:
+      # --------------------------------------------
+      # Checkout merged code
+      # --------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
-          ref: master
           fetch-depth: 0
 
-      - name: Create GitHub Release
-        env:
-          PAT: ${{ secrets.PAT }}
+      # --------------------------------------------
+      # Read version from composer.json
+      # --------------------------------------------
+      - name: Read version from composer.json
         run: |
-          set -e
-
           VERSION=$(jq -r '.version' composer.json)
-          echo "Detected version: $VERSION"
 
-          # Prevent duplicate release
-          if gh release view "v${VERSION}" --repo "${{ github.repository }}" --token "${PAT}" >/dev/null 2>&1; then
-            echo "Release v${VERSION} already exists."
-            exit 0
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "❌ Failed to read version from composer.json"
+            exit 1
           fi
 
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "✅ Releasing version $VERSION"
+
+      # --------------------------------------------
+      # Prepare clean release notes
+      # --------------------------------------------
+      - name: Prepare release notes
+        run: |
+          PR_BODY="${{ github.event.pull_request.body }}"
+
+          CLEAN_NOTES=$(echo "$PR_BODY" | sed \
+            -e '/^release:\s*/Id' \
+            -e '/^## Release Notes.*$/Id')
+
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
+          echo "$CLEAN_NOTES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      # --------------------------------------------
+      # Create GitHub Release
+      # --------------------------------------------
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
+        run: |
           gh release create "v${VERSION}" \
-            --title "Release v${VERSION}" \
-            --notes "Auto-release generated for version v${VERSION}" \
-            --repo "${{ github.repository }}" \
-            --token "${PAT}"
+            --title "Release ${VERSION}" \
+            --notes "$RELEASE_NOTES" \
+            --latest
