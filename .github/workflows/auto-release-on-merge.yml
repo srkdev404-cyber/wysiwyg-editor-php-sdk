@@ -1,4 +1,4 @@
-name: Auto Release – wysiwyg-php
+name: Auto Release – PHP SDK
 
 on:
   pull_request:
@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   release:
+    # Run only when PR is merged
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
@@ -50,7 +51,7 @@ jobs:
       # --------------------------------------------
       # Read version from composer.json
       # --------------------------------------------
-      - name: Read version from composer.json
+      - name: Read version
         run: |
           VERSION=$(jq -r '.version' composer.json)
 
@@ -68,7 +69,7 @@ jobs:
           echo "✅ Releasing version $VERSION"
 
       # --------------------------------------------
-      # Prepare clean release notes
+      # Prepare clean release notes from PR body
       # --------------------------------------------
       - name: Prepare release notes
         run: |
@@ -83,12 +84,18 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
 
       # --------------------------------------------
-      # Create GitHub Release
+      # Create GitHub Release (NO artifacts)
       # --------------------------------------------
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
         run: |
+          # Prevent duplicate releases
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "ℹ️ Release v${VERSION} already exists. Skipping."
+            exit 0
+          fi
+
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
             --notes "$RELEASE_NOTES" \
