@@ -1,4 +1,4 @@
-name: Sync Version from Master Repo
+name: Sync Version – PHP SDK
 
 on:
   repository_dispatch:
@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  sync_version:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,76 +23,107 @@ jobs:
           fetch-depth: 0
 
       # --------------------------------------------
-      # Sync Version
+      # Load & validate version (from primary repo)
       # --------------------------------------------
-      - name: Sync version from dispatch
-        env:
-          PAT: ${{ secrets.PAT }}
+      - name: Load & validate version
         run: |
-          set -e
-
           VERSION="${{ github.event.client_payload.version }}"
-          echo "Incoming version: $VERSION"
+          VERSION="${VERSION//,/\.}"
 
-          # Validate version (basic semver check)
-          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "❌ Invalid version format. Expected X.Y.Z"
+          if [ -z "$VERSION" ]; then
+            echo "❌ Version missing in dispatch payload"
             exit 1
           fi
 
-          CURRENT_VERSION=$(jq -r '.version' composer.json)
-          echo "Current version: $CURRENT_VERSION"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            exit 1
+          fi
 
-          # Stop if versions match
-          if [ "$VERSION" = "$CURRENT_VERSION" ]; then
-            echo "✔ Versions already match. Nothing to sync."
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Dispatching version $VERSION"
+
+      # --------------------------------------------
+      # Compare current version vs incoming version
+      # --------------------------------------------
+      - name: Compare current version
+        run: |
+          CURRENT_VERSION=$(jq -r '.version' composer.json)
+
+          if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" = "null" ]; then
+            echo "❌ Unable to determine current version from composer.json"
+            exit 1
+          fi
+
+          echo "📦 Current version : $CURRENT_VERSION"
+          echo "🚀 Incoming version: $VERSION"
+
+          if [ "$CURRENT_VERSION" = "$VERSION" ]; then
+            echo "⛔ Versions are identical. Denying PR creation."
             exit 0
           fi
 
-          BRANCH="sync-version-v${VERSION}"
-          echo "Using branch: $BRANCH"
+          echo "✅ Version change detected. Proceeding."
 
-          git config user.name "GitHub Actions Bot"
-          git config user.email "ci-bot@github.com"
+      # --------------------------------------------
+      # Prepare release branch
+      # --------------------------------------------
+      - name: Prepare release branch
+        run: |
+          BRANCH="release-v${VERSION}"
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
 
-          # Check if branch already exists remotely
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            echo "Branch already exists. Skipping branch creation."
+          git fetch origin
+
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
             git checkout "$BRANCH"
+            git pull origin "$BRANCH"
           else
             git checkout -b "$BRANCH"
           fi
 
-          # Update composer.json
+      # --------------------------------------------
+      # Update composer.json version
+      # --------------------------------------------
+      - name: Update composer.json
+        run: |
           jq ".version = \"$VERSION\"" composer.json > tmp.json
           mv tmp.json composer.json
 
+      # --------------------------------------------
+      # Commit & push
+      # --------------------------------------------
+      - name: Commit & push
+        run: |
+          git config user.name "froala-travis-bot"
+          git config user.email "froala_git_travis_bot@idera.com"
+
           git add composer.json
+          git commit -m "chore: release PHP SDK v${VERSION}" || echo "Nothing to commit"
+          git push origin "$BRANCH"
 
-          # Commit only if changes exist
-          if git diff --cached --quiet; then
-            echo "No changes detected after update."
-          else
-            git commit -m "chore: sync version to v${VERSION}"
-            git push https://x-access-token:${PAT}@github.com/${{ github.repository }} "$BRANCH"
-          fi
+      # --------------------------------------------
+      # Create Pull Request (Rails-style, release-gated)
+      # --------------------------------------------
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          RELEASE_NOTES: ${{ github.event.client_payload.release_notes }}
+        run: |
+          git fetch origin master
 
-          # Check if PR already exists
-          if gh pr list \
-              --head "$BRANCH" \
-              --repo "${{ github.repository }}" \
-              --token "${PAT}" \
-              --json number \
-              --jq 'length' | grep -q "1"; then
-            echo "PR already exists for $BRANCH"
+          if git diff --quiet origin/master..."$BRANCH"; then
+            echo "ℹ️ No commits between $BRANCH and master. Skipping PR creation."
             exit 0
           fi
 
-          # Create Pull Request
+          PR_BODY=$(printf \
+            "release: yes\n\n## Release Notes (from primary repo)\n\n%s\n" \
+            "$RELEASE_NOTES")
+
           gh pr create \
             --base master \
             --head "$BRANCH" \
-            --title "Sync version to v${VERSION}" \
-            --body "Automated version sync from master repository." \
-            --repo "${{ github.repository }}" \
-            --token "${PAT}"
+            --title "Release v${VERSION}" \
+            --body "$PR_BODY" \
+            || echo "Pull request already exists"
