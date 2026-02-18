@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    # Run only when PR is merged
+    # Only run when PR is merged
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
@@ -26,21 +26,23 @@ jobs:
             const title = context.payload.pull_request.title || '';
             const text  = `${title}\n${body}`;
 
-            core.setOutput(
-              'release',
-              /release:\s*yes/i.test(text) ? 'true' : 'false'
-            );
+            // Strict line match
+            const isRelease = text
+              .split('\n')
+              .some(line => line.trim().toLowerCase() === 'release: yes');
 
-      - name: Log and skip if not release PR
+            core.setOutput('release', isRelease ? 'true' : 'false');
+
+      - name: Skip if not a release PR
         if: steps.intent.outputs.release != 'true'
         run: echo "ℹ️ Not a release PR. Skipping auto-release."
 
-      # 👇 Everything below runs ONLY if release: yes
+      # Everything below runs ONLY if release: yes exists
+
       - name: Checkout repository
         if: steps.intent.outputs.release == 'true'
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT }}
           fetch-depth: 0
 
       - name: Read version
@@ -77,7 +79,7 @@ jobs:
       - name: Create GitHub Release
         if: steps.intent.outputs.release == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             echo "ℹ️ Release v${VERSION} already exists. Skipping."
@@ -87,4 +89,3 @@ jobs:
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
             --notes "$RELEASE_NOTES" \
-            --latest
