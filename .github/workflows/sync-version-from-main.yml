@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       # --------------------------------------------
-      # Load & validate version (from primary repo)
+      # Load & validate version
       # --------------------------------------------
       - name: Load & validate version
         run: |
@@ -41,29 +41,18 @@ jobs:
           fi
 
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Dispatching version $VERSION"
 
       # --------------------------------------------
-      # Compare current version vs incoming version
+      # Compare current version
       # --------------------------------------------
       - name: Compare current version
         run: |
           CURRENT_VERSION=$(jq -r '.version' composer.json)
 
-          if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" = "null" ]; then
-            echo "❌ Unable to determine current version from composer.json"
-            exit 1
-          fi
-
-          echo "📦 Current version : $CURRENT_VERSION"
-          echo "🚀 Incoming version: $VERSION"
-
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then
-            echo "⛔ Versions are identical. Denying PR creation."
+            echo "⛔ Versions identical. Skipping."
             exit 0
           fi
-
-          echo "✅ Version change detected. Proceeding."
 
       # --------------------------------------------
       # Prepare release branch
@@ -83,7 +72,7 @@ jobs:
           fi
 
       # --------------------------------------------
-      # Update composer.json version
+      # Update composer.json
       # --------------------------------------------
       - name: Update composer.json
         run: |
@@ -103,7 +92,7 @@ jobs:
           git push origin "$BRANCH"
 
       # --------------------------------------------
-      # Create Pull Request (Rails-style, release-gated)
+      # Create Pull Request
       # --------------------------------------------
       - name: Create Pull Request
         env:
@@ -113,12 +102,12 @@ jobs:
           git fetch origin master
 
           if git diff --quiet origin/master..."$BRANCH"; then
-            echo "ℹ️ No commits between $BRANCH and master. Skipping PR creation."
+            echo "ℹ️ No changes detected. Skipping PR."
             exit 0
           fi
 
           PR_BODY=$(printf \
-            "release: yes\n\n## Release Notes (from primary repo)\n\n%s\n" \
+            "release: yes\n\n## Release Notes\n\n%s\n" \
             "$RELEASE_NOTES")
 
           gh pr create \
