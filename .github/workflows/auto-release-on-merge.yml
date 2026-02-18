@@ -11,29 +11,73 @@ permissions:
 
 jobs:
   release:
-    if: >
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.body, 'release: yes')
+    # Only run if PR is merged
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
+
+      # --------------------------------------------
+      # Checkout repository (needed to read merge commit)
+      # --------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
           fetch-depth: 0
 
+      # --------------------------------------------
+      # Validate merge commit message
+      # --------------------------------------------
+      - name: Validate merge commit message
+        id: intent
+        run: |
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          COMMIT_MSG=$(git log -1 --pretty=%B "$MERGE_SHA")
+
+          echo "Merge commit message:"
+          echo "$COMMIT_MSG"
+
+          if echo "$COMMIT_MSG" | grep -iq "^release:\s*yes$"; then
+            echo "release=true" >> $GITHUB_OUTPUT
+          else
+            echo "release=false" >> $GITHUB_OUTPUT
+          fi
+
+      # --------------------------------------------
+      # Stop if commit does not contain release: yes
+      # --------------------------------------------
+      - name: Stop if not release commit
+        if: steps.intent.outputs.release != 'true'
+        run: |
+          echo "❌ Merge commit does not contain 'release: yes'. Skipping release."
+          exit 0
+
+      # --------------------------------------------
+      # Read version from composer.json
+      # --------------------------------------------
       - name: Read version
+        if: steps.intent.outputs.release == 'true'
         run: |
           VERSION=$(jq -r '.version' composer.json)
+
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "❌ Failed to read version"
+            exit 1
+          fi
+
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      # --------------------------------------------
+      # Create GitHub Release (notes from main repo PR body)
+      # --------------------------------------------
       - name: Create GitHub Release
+        if: steps.intent.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
         run: |
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            echo "Release already exists. Skipping."
+            echo "ℹ️ Release already exists. Skipping."
             exit 0
           fi
 
