@@ -11,17 +11,43 @@ permissions:
 
 jobs:
   release:
-    if: github.event.pull_request.merged == true &&
-        github.event.pull_request.title == 'release: yes'
+    # Run only if PR is merged
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
+
+      # 🔹 Checkout repository (needed to read commit message)
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 🔍 Validate release intent from merge commit message
+      - name: Validate release intent from commit message
+        id: intent
+        run: |
+          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+
+          COMMIT_MSG=$(git log -1 --pretty=%B "$MERGE_SHA")
+
+          echo "Merge Commit Message:"
+          echo "$COMMIT_MSG"
+
+          if echo "$COMMIT_MSG" | grep -iq "^release:\s*yes$"; then
+            echo "release=true" >> $GITHUB_OUTPUT
+          else
+            echo "release=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 🛑 Stop if not a release commit
+      - name: Skip if not release commit
+        if: steps.intent.outputs.release != 'true'
+        run: echo "ℹ️ Commit message does not contain 'release: yes'. Skipping release."
+
+      # 📦 Read version
       - name: Read version
+        if: steps.intent.outputs.release == 'true'
         run: |
           VERSION=$(jq -r '.version' composer.json)
 
@@ -30,12 +56,26 @@ jobs:
             exit 1
           fi
 
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            exit 1
+          fi
 
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "✅ Releasing version $VERSION"
+
+      # 🚀 Create GitHub Release
       - name: Create GitHub Release
+        if: steps.intent.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "ℹ️ Release v${VERSION} already exists. Skipping."
+            exit 0
+          fi
+
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
-            --notes "Automated release"
+            --notes "Automated release triggered by commit message" \
+            --latest
