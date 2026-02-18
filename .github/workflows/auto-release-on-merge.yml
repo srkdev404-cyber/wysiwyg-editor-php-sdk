@@ -11,13 +11,11 @@ permissions:
 
 jobs:
   release:
-    # Run only if PR is merged AND title is exactly "release: yes"
     if: github.event.pull_request.merged == true &&
-        toLower(github.event.pull_request.title) == 'release: yes'
+        github.event.pull_request.title == 'release: yes'
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -32,32 +30,12 @@ jobs:
             exit 1
           fi
 
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "❌ Invalid version format: $VERSION"
-            exit 1
-          fi
-
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "✅ Releasing version $VERSION"
-
-      - name: Prepare release notes from PR Body
-        run: |
-          PR_BODY="${{ github.event.pull_request.body }}"
-
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "$PR_BODY" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
 
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            echo "ℹ️ Release v${VERSION} already exists. Skipping."
-            exit 0
-          fi
-
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
-            --notes "$RELEASE_NOTES" \
-            --latest
+            --notes "Automated release"
