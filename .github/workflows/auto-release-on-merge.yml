@@ -11,42 +11,19 @@ permissions:
 
 jobs:
   release:
-    # Only run when PR is merged
-    if: github.event.pull_request.merged == true
+    # Run only if PR is merged AND title is exactly "release: yes"
+    if: github.event.pull_request.merged == true &&
+        toLower(github.event.pull_request.title) == 'release: yes'
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Validate release intent
-        id: intent
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const body  = context.payload.pull_request.body || '';
-            const title = context.payload.pull_request.title || '';
-            const text  = `${title}\n${body}`;
-
-            // Strict line match
-            const isRelease = text
-              .split('\n')
-              .some(line => line.trim().toLowerCase() === 'release: yes');
-
-            core.setOutput('release', isRelease ? 'true' : 'false');
-
-      - name: Skip if not a release PR
-        if: steps.intent.outputs.release != 'true'
-        run: echo "ℹ️ Not a release PR. Skipping auto-release."
-
-      # Everything below runs ONLY if release: yes exists
-
       - name: Checkout repository
-        if: steps.intent.outputs.release == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Read version
-        if: steps.intent.outputs.release == 'true'
         run: |
           VERSION=$(jq -r '.version' composer.json)
 
@@ -64,20 +41,14 @@ jobs:
           echo "✅ Releasing version $VERSION"
 
       - name: Prepare release notes from PR Body
-        if: steps.intent.outputs.release == 'true'
         run: |
           PR_BODY="${{ github.event.pull_request.body }}"
 
-          CLEAN_NOTES=$(echo "$PR_BODY" | sed \
-            -e '/^release:\s*/Id' \
-            -e '/^## Release Notes.*$/Id')
-
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
-          echo "$CLEAN_NOTES" >> $GITHUB_ENV
+          echo "$PR_BODY" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
       - name: Create GitHub Release
-        if: steps.intent.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -89,3 +60,4 @@ jobs:
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
             --notes "$RELEASE_NOTES" \
+            --latest
