@@ -11,64 +11,69 @@ permissions:
 
 jobs:
   release:
-    # Run only if PR is merged
+    # ONLY run if PR was merged
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
 
     steps:
-
-      # 🔹 Checkout repository (needed to read commit message)
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # 🔍 Validate release intent from merge commit message
-      - name: Validate release intent from commit message
+      # --------------------------------------------
+      # Validate release intent from PR body
+      # --------------------------------------------
+      - name: Validate release intent
         id: intent
         run: |
-          MERGE_SHA="${{ github.event.pull_request.merge_commit_sha }}"
+          BODY="${{ github.event.pull_request.body }}"
 
-          COMMIT_MSG=$(git log -1 --pretty=%B "$MERGE_SHA")
+          echo "PR Body:"
+          echo "$BODY"
 
-          echo "Merge Commit Message:"
-          echo "$COMMIT_MSG"
-
-          if echo "$COMMIT_MSG" | grep -iq "^release:\s*yes$"; then
+          if echo "$BODY" | grep -iq "^release:\s*yes$"; then
             echo "release=true" >> $GITHUB_OUTPUT
           else
             echo "release=false" >> $GITHUB_OUTPUT
           fi
 
-      # 🛑 Stop if not a release commit
-      - name: Skip if not release commit
+      # --------------------------------------------
+      # Stop if not release PR
+      # --------------------------------------------
+      - name: Skip if not release PR
         if: steps.intent.outputs.release != 'true'
-        run: echo "ℹ️ Commit message does not contain 'release: yes'. Skipping release."
+        run: |
+          echo "ℹ️ PR does not contain exact 'release: yes'. Skipping."
+          exit 0
 
-      # 📦 Read version
+      # --------------------------------------------
+      # Checkout repository
+      # --------------------------------------------
+      - name: Checkout repository
+        if: steps.intent.outputs.release == 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT }}
+          fetch-depth: 0
+
+      # --------------------------------------------
+      # Read version
+      # --------------------------------------------
       - name: Read version
         if: steps.intent.outputs.release == 'true'
         run: |
           VERSION=$(jq -r '.version' composer.json)
 
           if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "❌ Failed to read version from composer.json"
-            exit 1
-          fi
-
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "❌ Invalid version format: $VERSION"
+            echo "❌ Failed to read version"
             exit 1
           fi
 
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "✅ Releasing version $VERSION"
 
-      # 🚀 Create GitHub Release
+      # --------------------------------------------
+      # Create GitHub Release
+      # --------------------------------------------
       - name: Create GitHub Release
         if: steps.intent.outputs.release == 'true'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.PAT }}
         run: |
           if gh release view "v${VERSION}" >/dev/null 2>&1; then
             echo "ℹ️ Release v${VERSION} already exists. Skipping."
@@ -77,5 +82,5 @@ jobs:
 
           gh release create "v${VERSION}" \
             --title "Release ${VERSION}" \
-            --notes "Automated release triggered by commit message" \
+            --notes "${{ github.event.pull_request.body }}" \
             --latest
